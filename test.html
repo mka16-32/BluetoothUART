@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>micro:bit BLE Scan Test</title>
+</head>
+<body>
+<h2>micro:bit BLE Scan Test</h2>
+<button id="scanBtn">Scan for micro:bit</button>
+<div id="logArea" style="margin-top:10px; white-space:pre-line;"></div>
+
+<script>
+const log = document.getElementById("logArea");
+
+function addLog(msg) {
+    const t = new Date().toLocaleTimeString();
+    log.textContent += `[${t}] ${msg}\n`;
+}
+
+// スキャンボタン
+document.getElementById("scanBtn").onclick = async () => {
+    try {
+        addLog("Scanning...");
+        const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+        });
+        addLog(`Found device: ${device.name || device.id}`);
+    } catch (err) {
+        addLog("Error: " + err);
+    }
+};
+</script>
+</body>
+</html>
