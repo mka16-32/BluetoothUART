@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+
+<title>micro:bit Controller</title>
+<style>
+/* ------------------------------
+      ベース（背景・文字）
+------------------------------ */
+body {
+    margin: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    text-align: center;
+    background: var(--bg);
+    color: var(--fg);
+    transition: background 0.3s, color 0.3s;
+}
+
+/* Light / Dark 変数切替 */
+@media (prefers-color-scheme: light) {
+    :root {
+        --bg: #f2f2f7;
+        --fg: #000;
+        --card-bg: #ffffff;
+        --card-border: #e5e5ea;
+        --accent: #007aff;
+        --btn-fg: #000;
+    }
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #1c1c1e;
+        --fg: #fff;
+        --card-bg: #2c2c2e;
+        --card-border: #3a3a3c;
+        --accent: #0a84ff;
+        --btn-fg: #fff;
+    }
+}
+
+/* ------------------------------
+      Connect ボタン
+------------------------------ */
+#connectBtn {
+    padding: 12px 20px;
+    font-size: 1.05rem;
+    border-radius: 14px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    color: var(--fg);
+    transition: 0.2s;
+    width: 200px;
+}
+#connectBtn.connected {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+/* ------------------------------
+      グリッドボタン（操作）
+------------------------------ */
+.grid {
+    display: grid;
+    margin: 20px auto;
+    gap: 14px;
+    max-width: 420px;
+}
+
+.grid button {
+    padding: 18px;
+    font-size: min(5vw, 1.25rem);
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 20px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    color: var(--fg);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.08);
+    transition: transform 0.08s ease;
+}
+
+/* タップ時の縮小アニメ */
+.grid button:active {
+    transform: scale(0.94);
+}
+
+/* ------------------------------
+       アコーディオン
+------------------------------ */
+#accordion {
+    margin-top: 30px;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+#accordionHeader {
+    cursor: pointer;
+    font-size: 1.15rem;
+    padding: 14px;
+    width: 100%;
+    border-radius: 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    color: var(--fg);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.08);
+}
+
+#accordionContent {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.35s ease;
+    border-radius: 16px;
+    margin-top: 10px;
+    padding: 0 0;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+}
+
+/* ------------------------------
+        送信欄
+------------------------------ */
+#sendBox {
+    margin: 20px;
+    display: flex;
+    gap: 10px;
+}
+
+#uartInput {
+    flex: 1;
+    padding: 10px 12px;
+    font-size: 1rem;
+    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    background: var(--bg);
+    color: var(--fg);
+}
+
+#uartSendBtn {
+    padding: 10px 16px;
+    font-size: 1rem;
+    border-radius: 12px;
+    background: var(--accent);
+    color: white;
+    border: none;
+}
+
+/* ------------------------------
+        ログ
+------------------------------ */
+#logArea {
+    height: 200px;
+    overflow-y: auto;
+    overflow-x: auto;       /* ← 横スクロールを追加 */
+    padding: 8px;
+    text-align: left;
+    border-radius: 6px;
+    border: 1px solid #aaa;
+    background: rgba(0,0,0,0.05);
+    margin-bottom: 15px;
+    font-size: 0.9rem;
+
+    white-space: pre;          /* ← ここが最重要 */
+    overflow-x: auto;          /* 横スクロール */
+    overflow-y: auto;          /* 縦スクロール */   /* ← 折り返さない */
+    line-height: 1.4;
+}
+
+
+
+</style>
+</head>
+<body>
+
+<h2 id="pageTitle">Bluetooth ボタン送信パネル</h2>
+<button id="connectBtn">Connect</button>
+
+<div class="grid" id="buttonGrid"></div>
+
+<!-- ▼ アコーディオン ▼ -->
+<div id="accordion">
+  <div id="accordionHeader">▼ ログ & UART 送信</div>
+
+  <div id="accordionContent">
+      <div id="sendBox">
+        <input type="text" id="uartInput" placeholder="UARTへ送信">
+        <button id="uartSendBtn">送信</button>
+      </div>
+
+      <div id="logArea"></div>
+  </div>
+</div>
+
+<script>
+// ========================
+// 設定
+// ========================
+
+// ブラウザタブのタイトル
+const PAGE_TITLE = "micro:bit Controller";
+
+// ページ内に表示するタイトル
+const PAGE_HEADER = "Bluetooth UART コントローラー";
+
+// グリッド行×列
+const GRID_ROWS = 4;   // ← 行数（縦）
+const GRID_COLS = 3;   // ← 列数（横）
+
+// ボタン設定（表示名と送信内容）
+const buttons = [
+  { label: "左回転", send: "LSpin" },
+  { label: "⬆", send: "Front" },
+  { label: "右回転", send: "RSpin" },
+  { label: "⬅", send: "Left" },
+  { label: "◯", send: "Center" },
+  { label: "➡", send: "Right" },
+  { label: "-", send: "Minus" },
+  { label: "⬇", send: "Back" },
+  { label: "+", send: "Plus" },
+  { label: "_", send: "10" },
+  { label: "_", send: "11" },
+  { label: "_", send: "12" }
+];
+
+document.addEventListener("DOMContentLoaded", () => {
+    document.title = PAGE_TITLE;              // ← タブ名
+    document.getElementById("pageTitle").textContent = PAGE_HEADER; // ← 画面タイトル
+});
+
+// ========================
+// Web Bluetooth 対応チェック
+// ========================
+if (!navigator.bluetooth) {
+    alert("❌ このブラウザは Web Bluetooth に対応していません。\nChrome / Edge を使用してください。");
+    document.getElementById("connectBtn").style.display = "none";
+    document.getElementById("buttonGrid").style.display = "none";
+}
+
+// ========================
+// グリッド構築
+// ========================
+const grid = document.getElementById("buttonGrid");
+grid.style.gridTemplateColumns = `repeat(${GRID_COLS}, 1fr)`;
+
+buttons.forEach(b => {
+    const btn = document.createElement("button");
+    btn.textContent = b.label;
+
+    btn.onclick = async () => {
+        try {
+            await sendUART(b.send, "button");
+            flashButtonColor(btn, "ok");
+        } catch (err) {
+            flashButtonColor(btn, "ng");
+            addErrorLog(`ボタン ${b.label} の送信`, err);
+        }
+    };
+
+    grid.appendChild(btn);
+});
+
+
+// ========================
+// ボタンの色を一時変更
+// ========================
+function flashButtonColor(btn, status) {
+    const original = btn.style.backgroundColor;
+
+    if (status === "ok") {
+        btn.style.backgroundColor = "#3b82f6";  // 青
+        btn.style.color = "white";
+    } else {
+        btn.style.backgroundColor = "#ef4444";  // 赤
+        btn.style.color = "white";
+    }
+
+    setTimeout(() => {
+        btn.style.backgroundColor = "";
+        btn.style.color = "";
+    }, 200);
+}
+
+
+// ========================
+// ログ
+// ========================
+function addLog(source, msg) {
+    const t = new Date().toLocaleTimeString();
+    const log = document.getElementById("logArea");
+
+    // 最初のログでなければ改行を追加
+    if (log.textContent.length > 0) log.textContent += "\n";
+
+    // 1件のログは改行しない
+    log.textContent += `[${t}] (${source}) ${msg}`;
+
+    log.scrollTop = log.scrollHeight;
+}
+
+
+
+/* =============================
+   エラーログ
+============================= */
+function addErrorLog(action, error) {
+    const t = new Date().toLocaleTimeString();
+    const log = document.getElementById("logArea");
+    const reason = (error?.message || error).toString().replace(/\n/g, " ");
+
+    // 前にログがあるなら改行
+    if (log.textContent.length > 0) log.textContent += "\n";
+
+    // 1行のエラーログ
+    log.textContent += `[${t}] (ERROR) action=${action} reason=${reason}`;
+
+    log.scrollTop = log.scrollHeight;
+}
+
+
+
+// ========================
+// Bluetooth 接続
+// ========================
+let txChar, rxChar;
+
+document.getElementById("connectBtn").onclick = async () => {
+    try {
+        let device = await navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: "BBC micro:bit" }],
+            optionalServices: ["6e400001-b5a3-f393-e0a9-e50e24dcca9e"]
+        });
+
+        let server = await device.gatt.connect();
+        let service = await server.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+
+        txChar = await service.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
+        rxChar = await service.getCharacteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
+
+        // 受信
+        await rxChar.startNotifications();
+        rxChar.addEventListener("characteristicvaluechanged", e => {
+            try {
+                const msg = new TextDecoder().decode(e.target.value);
+                addLog("micro:bit", msg);
+            } catch (err) {
+                addErrorLog("UART 受信処理", err);
+            }
+        });
+
+        document.getElementById("connectBtn").classList.add("connected");
+        document.getElementById("connectBtn").textContent = "Connected";
+
+        addLog("system", "Bluetooth connected");
+
+        // 切断時
+        device.addEventListener("gattserverdisconnected", () => {
+            document.getElementById("connectBtn").classList.remove("connected");
+            document.getElementById("connectBtn").textContent = "Connect";
+            addLog("system", "Disconnected");
+        });
+
+    } catch (e) {
+        addErrorLog("Bluetooth 接続", e);
+    }
+};
+
+
+// ========================
+// UART 送信
+// ========================
+async function sendUART(text, sourceType="user") {
+    if (!txChar) {
+        const err = "まだ Bluetooth に接続されていません";
+        addErrorLog("UART送信", err);
+        throw new Error(err);
+    }
+
+    try {
+        await txChar.writeValue(new TextEncoder().encode(text));
+        addLog(sourceType, text);
+    } catch (err) {
+        addErrorLog(`UART送信 "${text}"`, err);
+        throw err;
+    }
+}
+
+// ========================
+// テキストボックス送信
+// ========================
+document.getElementById("uartSendBtn").onclick = async () => {
+    const v = document.getElementById("uartInput").value.trim();
+
+    if (!v) return;
+
+    try {
+        await sendUART(v, "user");
+        addLog("user", v);
+    } catch (err) {
+        addErrorLog("UART 手動送信", err);
+    }
+};
+
+
+// ========================
+// アコーディオン
+// ========================
+const accHeader = document.getElementById("accordionHeader");
+const accContent = document.getElementById("accordionContent");
+
+accHeader.onclick = () => {
+    if (accContent.style.maxHeight) {
+        accContent.style.maxHeight = null;
+    } else {
+        accContent.style.maxHeight = accContent.scrollHeight + "px";
+    }
+};
+
+// スマホの長押し右クリック無効
+document.addEventListener("contextmenu", e => e.preventDefault());
+</script>
+
+</body>
+</html>
