@@ -1,118 +1,119 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<title>micro:bit UART Auto Tester</title>
+<meta charset="UTF-8" />
+<title>micro:bit UART テスト (ChatGPT生成)</title>
 <style>
 body { font-family: sans-serif; padding: 20px; }
-button { padding: 10px 20px; border: none; background: #0078ff; color: #fff; border-radius: 6px; margin: 5px; }
-#log { border: 1px solid #aaa; height: 300px; overflow-y: scroll; padding: 10px; white-space: pre; font-size: 14px; }
-.ok { color: blue; }
-.err { color: red; }
+#log { white-space: pre-wrap; background: #f0f0f0; padding: 10px; height: 200px; overflow-y: scroll; border: 1px solid #ccc; }
+button { padding: 10px 16px; margin: 6px 0; }
+input { padding: 6px; width: 200px; }
 </style>
 </head>
 <body>
-
-<h1>micro:bit UART Auto Tester</h1>
-<button id="startBtn">Start Test</button>
-
-<h3>Log</h3>
+<h2>micro:bit UART テストページ</h2>
+<p>micro:bit のUARTサービス (0000ffe3 / Nordic UART) をテストします。</p>
+<button id="scanBtn">Bluetooth接続</button>
+<div>
+  <input id="sendText" placeholder="送信テキスト" />
+  <button id="sendBtn">送信</button>
+</div>
+<h3>ログ</h3>
 <div id="log"></div>
 
-<p style="font-size:12px;color:#666;">Powered by ChatGPT</p>
-
 <script>
-let device;
-let server;
-let txChar, rxChar;
+const log = (msg) => {
+  const area = document.getElementById("log");
+  area.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  area.scrollTop = area.scrollHeight;
+};
 
-// ログ出力
-function log(msg, ok=true) {
-  const div = document.getElementById("log");
-  const line = document.createElement("div");
-  line.className = ok ? "ok" : "err";
-  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  div.appendChild(line);
-  div.scrollTop = div.scrollHeight;
-}
+let device = null;
+let server = null;
+let uartService = null;
+let txCharacteristic = null;
+let rxCharacteristic = null;
 
-document.getElementById("startBtn").onclick = async () => {
+// micro:bit UART UUID
+// Nordic UART Service
+const UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const UART_TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // notify
+const UART_RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // write
+
+// HTML elements
+const scanBtn = document.getElementById("scanBtn");
+const sendBtn = document.getElementById("sendBtn");
+const sendText = document.getElementById("sendText");
+
+scanBtn.onclick = async () => {
+  log("スキャン開始");
   try {
-    log("スキャン開始");
-
     device = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: [
-        "battery_service",
-        "device_information",
-        "6e400001-b5a3-f393-e0a9-e50e24dcca9e" // UART
-      ]
+      filters: [{ namePrefix: "BBC micro:bit" }],
+      optionalServices: [UART_SERVICE_UUID, "device_information"]
     });
+    log(`デバイス検出: ${device.name}`);
 
-    log("デバイス検出: " + (device.name || "(名前なし)"));
+    device.addEventListener("gattserverdisconnected", () => {
+      log("⚠️ 切断されました");
+    });
 
     server = await device.gatt.connect();
     log("GATT接続成功");
 
-    // サービス一覧表示
     const services = await server.getPrimaryServices();
-    log("サービス一覧取得: " + services.length + "件");
+    log(`サービス一覧取得: ${services.length}件`);
+    for (const s of services) log(`Service UUID: ${s.uuid}`);
 
-    for (const s of services) {
-      log("Service UUID: " + s.uuid);
+    uartService = await server.getPrimaryService(UART_SERVICE_UUID).catch(() => null);
+    if (!uartService) {
+      log("❌ UART サービスがありません");
+      return;
     }
+    log("UARTサービス取得成功");
 
-    // UART を取得
-    let uartService;
-    try {
-      uartService = await server.getPrimaryService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-      log("UARTサービス取得成功");
-    } catch {
-      log("UART サービスがありません", false);
+    // RX (書き込み)
+    rxCharacteristic = await uartService.getCharacteristic(UART_RX_UUID).catch(() => null);
+    // TX (通知)
+    txCharacteristic = await uartService.getCharacteristic(UART_TX_UUID).catch(() => null);
+
+    if (!rxCharacteristic || !txCharacteristic) {
+      log("❌ UARTキャラクタリスティックが取得できません");
       return;
     }
 
-    // TX
-    try {
-      txChar = await uartService.getCharacteristic("6e400002-b5a3-f393-e0a9-e50e24dcca9e");
-      log("TX characteristic OK");
-    } catch (e) {
-      log("TX characteristic エラー: " + e.message, false);
-      return;
-    }
+    log("UARTキャラクタリスティック取得成功");
 
-    // RX
-    try {
-      rxChar = await uartService.getCharacteristic("6e400003-b5a3-f393-e0a9-e50e24dcca9e");
-      log("RX characteristic OK");
-    } catch (e) {
-      log("RX characteristic エラー: " + e.message, false);
-      return;
-    }
-
-    // 通知開始
-    await rxChar.startNotifications();
-    rxChar.addEventListener("characteristicvaluechanged", e => {
-      const msg = new TextDecoder().decode(e.target.value);
-      log("RX ← " + msg);
+    // Notification 受信
+    await txCharacteristic.startNotifications();
+    txCharacteristic.addEventListener("characteristicvaluechanged", (ev) => {
+      const v = new TextDecoder().decode(ev.target.value);
+      log(`受信: ${v}`);
     });
-
-    log("UART 受信通知開始");
-
-    // PING テスト
-    await txChar.writeValue(new TextEncoder().encode("PING"));
-    log("TX → PING");
-
-    // 切断イベント
-    device.addEventListener("gattserverdisconnected", () => {
-      log("切断されました");
-    });
+    log("通知の購読開始");
 
   } catch (e) {
-    log("エラー: " + e.message, false);
+    log("❌ エラー: " + e);
+  }
+};
+
+sendBtn.onclick = async () => {
+  if (!rxCharacteristic) {
+    log("❌ UARTが未接続");
+    return;
+  }
+  try {
+    const text = sendText.value;
+    const data = new TextEncoder().encode(text);
+    await rxCharacteristic.writeValue(data);
+    log(`送信: ${text}`);
+  } catch (e) {
+    log("❌ 送信エラー: " + e);
   }
 };
 </script>
 
+<hr />
+<p style="opacity:0.7; font-size:12px;">This test page was fully generated by ChatGPT.</p>
 </body>
 </html>
