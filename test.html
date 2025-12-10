@@ -22,6 +22,20 @@ input { padding: 6px; width: 200px; }
 <div id="log"></div>
 
 <script>
+try {
+    await txCharacteristic.startNotifications();
+    log("NOTIFY OK: 通知は有効化できました");
+} catch (err) {
+    log("NOTIFY NG: " + err);
+}
+
+try {
+    await rxCharacteristic.writeValue(new TextEncoder().encode("TEST"));
+    log("WRITE OK: 書き込み成功");
+} catch (err) {
+    log("WRITE NG: " + err);
+}
+  
 const log = (msg) => {
   const area = document.getElementById("log");
   area.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
