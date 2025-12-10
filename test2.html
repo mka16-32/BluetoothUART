@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Bluetooth API による双方向通信（micro:bit）</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.1/css/bulma.css"/>
+    <style>
+      .message-container {
+        margin-top: 1rem;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        padding: 1rem;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      .log-entry {
+        margin-bottom: 0.5rem;
+      }
+      .received {
+        color: #3273dc;
+      }
+      .sent {
+        color: #48c774;
+      }
+      .error {
+        color: #f14668;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="section">
+      <div class="container">
+        <h1 class="title">micro:bit BLE UART通信</h1>
+        
+        <!-- 接続ボタン -->
+        <div class="buttons" style="margin-top: 1.5rem">
+          <button id="connectButton" class="button is-success is-light" type="button">micro:bit 接続</button>
+          <button id="disconnectButton" class="button is-danger is-light" type="button" disabled>切断</button>
+        </div>
+
+        <!-- 接続状態表示 -->
+        <div class="notification is-light" id="statusNotification">
+          <p id="statusText">未接続</p>
+        </div>
+
+        <!-- 送信フォーム -->
+        <div class="field has-addons">
+          <div class="control is-expanded">
+            <input id="messageInput" class="input" type="text" placeholder="microbitに送信するメッセージ" disabled>
+          </div>
+          <div class="control">
+            <button id="sendButton" class="button is-info" disabled>送信</button>
+          </div>
+        </div>
+
+        <!-- プリセットコマンド -->
+        <div class="buttons" style="margin-top: 1rem">
+          <button id="ledOnButton" class="button is-primary is-small is-light" disabled>LED ON</button>
+          <button id="ledOffButton" class="button is-primary is-small is-light" disabled>LED OFF</button>
+          <button id="textButton" class="button is-primary is-small is-light" disabled>テキスト表示</button>
+        </div>
+
+        <!-- 通信ログ -->
+        <div class="box">
+          <div class="level">
+            <div class="level-left">
+              <h2 class="subtitle">通信ログ</h2>
+            </div>
+            <div class="level-right">
+              <button id="clearLogButton" class="button is-small is-info is-light">ログクリア</button>
+            </div>
+          </div>
+          <div id="logContainer" class="message-container">
+            <!-- ここにログが表示される -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      // UUIDの定義
+      const UUID_UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+      const UUID_TX_CHAR_CHARACTERISTIC = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // micro:bitからデータを受信
+      const UUID_RX_CHAR_CHARACTERISTIC = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // micro:bitへデータを送信
+
+      // グローバル変数
+      let device;
+      let txCharacteristic; // 受信用
+      let rxCharacteristic; // 送信用
+      
+      // DOM要素の取得
+      const connectButton = document.getElementById('connectButton');
+      const disconnectButton = document.getElementById('disconnectButton');
+      const messageInput = document.getElementById('messageInput');
+      const sendButton = document.getElementById('sendButton');
+      const statusText = document.getElementById('statusText');
+      const statusNotification = document.getElementById('statusNotification');
+      const logContainer = document.getElementById('logContainer');
+      const ledOnButton = document.getElementById('ledOnButton');
+      const ledOffButton = document.getElementById('ledOffButton');
+      const textButton = document.getElementById('textButton');
+      const clearLogButton = document.getElementById('clearLogButton');
+
+      // イベントリスナーの設定
+      connectButton.addEventListener('click', onConnectButtonClick);
+      disconnectButton.addEventListener('click', onDisconnectButtonClick);
+      sendButton.addEventListener('click', sendMessage);
+      messageInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          sendMessage();
+        }
+      });
+      ledOnButton.addEventListener('click', () => sendPresetCommand('on'));
+      ledOffButton.addEventListener('click', () => sendPresetCommand('off'));
+      textButton.addEventListener('click', () => sendPresetCommand('hello'));
+      clearLogButton.addEventListener('click', clearLog);
+
+      // ログを追加する関数
+      function addLog(message, type = 'info') {
+        const logEntry = document.createElement('div');
+        logEntry.className = `log-entry ${type}`;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        logEntry.textContent = `[${timestamp}] ${message}`;
+        
+        logContainer.appendChild(logEntry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
+
+      // 接続状態を更新する関数
+      function updateConnectionStatus(connected) {
+        if (connected) {
+          statusText.textContent = '接続済み';
+          statusNotification.className = 'notification is-success is-light';
+          connectButton.disabled = true;
+          disconnectButton.disabled = false;
+          messageInput.disabled = false;
+          sendButton.disabled = false;
+          ledOnButton.disabled = false;
+          ledOffButton.disabled = false;
+          textButton.disabled = false;
+        } else {
+          statusText.textContent = '未接続';
+          statusNotification.className = 'notification is-light';
+          connectButton.disabled = false;
+          disconnectButton.disabled = true;
+          messageInput.disabled = true;
+          sendButton.disabled = true;
+          ledOnButton.disabled = true;
+          ledOffButton.disabled = true;
+          textButton.disabled = true;
+        }
+      }
+
+      // 接続ボタンのクリックイベント
+      async function onConnectButtonClick() {
+        try {
+          addLog('Bluetoothデバイスをリクエスト中...');
+          device = await navigator.bluetooth.requestDevice({
+            filters: [
+              { services: [UUID_UART_SERVICE] },
+              { namePrefix: "BBC micro:bit" },
+            ],
+          });
+
+          addLog(`デバイス「${device.name}」を選択しました`);
+          
+          // 切断イベントを監視
+          device.addEventListener('gattserverdisconnected', onDisconnected);
+
+          addLog('GATTサーバーに接続中...');
+          const server = await device.gatt.connect();
+          
+          addLog('UARTサービスを取得中...');
+          const service = await server.getPrimaryService(UUID_UART_SERVICE);
+          
+          addLog('Characteristic（受信用）を取得中...');
+          txCharacteristic = await service.getCharacteristic(UUID_TX_CHAR_CHARACTERISTIC);
+          await txCharacteristic.startNotifications();
+          txCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+          addLog('受信の通知を開始しました');
+          
+          addLog('Characteristic（送信用）を取得中...');
+          rxCharacteristic = await service.getCharacteristic(UUID_RX_CHAR_CHARACTERISTIC);
+          addLog('送信の準備ができました');
+          
+          updateConnectionStatus(true);
+        } catch (error) {
+          addLog(`エラーが発生しました: ${error}`, 'error');
+          console.error('接続エラー:', error);
+        }
+      }
+
+      // 切断ボタンのクリックイベント
+      async function onDisconnectButtonClick() {
+        if (device && device.gatt.connected) {
+          device.gatt.disconnect();
+          addLog('デバイスから切断しました');
+        } else {
+          addLog('すでに切断されています');
+        }
+        updateConnectionStatus(false);
+      }
+
+      // 切断イベントハンドラ
+      function onDisconnected() {
+        addLog('デバイスが切断されました', 'error');
+        updateConnectionStatus(false);
+      }
+
+      // 通知イベントハンドラ（データ受信時）
+      function handleNotifications(event) {
+        try {
+          const value = event.target.value;
+          const inputValue = new TextDecoder().decode(value).replace(/\r?\n/g, '');
+          
+          // 受信データの種類に応じた処理
+          let logMessage = '';
+          switch (inputValue) {
+            case "buttonA":
+              logMessage = `受信: Aボタンが押されました`;
+              break;
+            case "buttonB":
+              logMessage = `受信: Bボタンが押されました`;
+              break;
+            case "left":
+              logMessage = `受信: 左に傾きました`;
+              break;
+            case "right":
+              logMessage = `受信: 右に傾きました`;
+              break;
+            default:
+              // 数値データかどうか確認
+              const numValue = parseInt(inputValue);
+              if (!isNaN(numValue)) {
+                logMessage = `受信: センサ値 ${numValue}`;
+              } else {
+                logMessage = `受信: ${inputValue}`;
+              }
+          }
+          
+          addLog(logMessage, 'received');
+          console.log(logMessage);
+        } catch (error) {
+          addLog(`受信エラー: ${error}`, 'error');
+          console.error('受信エラー:', error);
+        }
+      }
+
+      // メッセージ送信関数
+      async function sendMessage() {
+        if (!rxCharacteristic) {
+          addLog('送信できません: デバイスが接続されていません', 'error');
+          return;
+        }
+
+        const message = messageInput.value.trim();
+        if (message === '') {
+          return;
+        }
+
+        try {
+          // 改行コードを追加してテキストをUint8Arrayに変換
+          const encoder = new TextEncoder();
+          const data = encoder.encode(message + '\n');
+          
+          // データ送信
+          await rxCharacteristic.writeValue(data);
+          addLog(`送信: ${message}`, 'sent');
+          
+          // 入力フィールドをクリア
+          messageInput.value = '';
+        } catch (error) {
+          addLog(`送信エラー: ${error}`, 'error');
+          console.error('送信エラー:', error);
+        }
+      }
+
+      // プリセットコマンド送信関数
+      async function sendPresetCommand(command) {
+        if (!rxCharacteristic) {
+          addLog('送信できません: デバイスが接続されていません', 'error');
+          return;
+        }
+
+        let message = '';
+        switch (command) {
+          case 'on':
+            message = 'led:on';
+            break;
+          case 'off':
+            message = 'led:off';
+            break;
+          case 'hello':
+            message = 'text:Hello!';
+            break;
+        }
+
+        try {
+          // 改行コードを追加してテキストをUint8Arrayに変換
+          const encoder = new TextEncoder();
+          const data = encoder.encode(message + '\n');
+          
+          // データ送信
+          await rxCharacteristic.writeValue(data);
+          addLog(`送信: ${message} (プリセットコマンド)`, 'sent');
+        } catch (error) {
+          addLog(`送信エラー: ${error}`, 'error');
+          console.error('送信エラー:', error);
+        }
+      }
+      
+      // ログをクリアする関数
+      function clearLog() {
+        // ログコンテナの中身を空にする
+        logContainer.innerHTML = '';
+        addLog('ログをクリアしました', 'info');
+      }
+    </script>
+  </body>
+</html>
